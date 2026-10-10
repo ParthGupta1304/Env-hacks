@@ -1,6 +1,6 @@
 # RebootRoute Progress
 
-Last updated: 2026-10-10
+Last updated: 2026-10-10 (initial commit pushed)
 
 ## Current status
 
@@ -13,7 +13,7 @@ Last updated: 2026-10-10
 | Review PRD and confirm stack/scope | Complete | Four-day React PWA + AWS serverless MVP; rules-first safety path |
 | Write implementation plan | Complete | See [`plan.md`](plan.md); Amplify Hosting selected from the PRD's allowed choices |
 | Add progress update rule | Complete | Repository guidance added in [`AGENTS.md`](AGENTS.md) |
-| Connect Git remote | Complete | `origin` is `https://github.com/ParthGupta1304/Env-hacks.git`; branch `main`; no commits yet |
+| Connect Git remote | Complete | `origin` is `https://github.com/ParthGupta1304/Env-hacks.git`; `main` tracks `origin/main`; initial commit `183bad3` pushed and is the GitHub default branch |
 | Day 1: foundation and rules | Not started | Local app, intake checklist, deterministic decision rules |
 | Day 2: AWS backend and custody | Not started | SAM, API Gateway, Lambda, Cognito, DynamoDB, S3, QR/custody |
 | Day 3: admin, privacy, optional AI | Not started | Dashboard/queue, declarations, advisory AI adapter and fallback |
