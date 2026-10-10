@@ -1,0 +1,14 @@
+node_modules/
+dist/
+backend/dist/
+.aws-sam/
+.env
+.env.*
+!.env.example
+*.local
+coverage/
+test-results/
+playwright-report/
+.DS_Store
+samconfig.toml
+aws-outputs.json

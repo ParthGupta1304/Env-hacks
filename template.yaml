@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: RebootRoute safety assessment API and Day 2 resource foundation (not yet persistent).
+Parameters:
+  AppEnvironment:
+    Type: String
+    Default: development
+    AllowedValues: [development, staging, production]
+  AllowedOrigin:
+    Type: String
+    Default: http://127.0.0.1:5173
+    Description: Exact browser origin, no trailing slash. Set to the Amplify origin when hosted.
+    AllowedPattern: '^https?://[a-zA-Z0-9.-]+(:[0-9]+)?$'
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        APP_ENV: !Ref AppEnvironment
+        ALLOWED_ORIGIN: !Ref AllowedOrigin
+        AI_ADAPTER_MODE: manual
+    Tags:
+      Project: RebootRoute
+      Environment: !Ref AppEnvironment
+Resources:
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref AppEnvironment
+      EndpointConfiguration: REGIONAL
+      Cors:
+        AllowOrigin: !Sub "'${AllowedOrigin}'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+      Auth:
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CampusCognito:
+            UserPoolArn: !GetAtt UserPool.Arn
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+          MetricsEnabled: true
+          DataTraceEnabled: false
+      Tags:
+        Project: RebootRoute
+  AssessmentFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Target: es2022
+        Format: cjs
+        Minify: true
+        Sourcemap: false
+        EntryPoints: [backend/handler.ts]
+    Properties:
+      CodeUri: .
+      Handler: handler.handler
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      # No table/bucket/event write grants until Day 2 uses those resources.
+      Events:
+        Health:
+          Type: Api
+          Properties: { RestApiId: !Ref Api, Path: /health, Method: get }
+        AssessmentPreview:
+          Type: Api
+          Properties: { RestApiId: !Ref Api, Path: /assessments/preview, Method: post }
+        Session:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /session
+            Method: get
+            Auth: { Authorizer: CampusCognito }
+  FunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AssessmentFunction}'
+      RetentionInDays: 14
+  DevicesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{ AttributeName: deviceId, AttributeType: S }]
+      KeySchema: [{ AttributeName: deviceId, KeyType: HASH }]
+      SSESpecification: { SSEEnabled: true }
+      Tags: [{ Key: Project, Value: RebootRoute }]
+  CustodyEventsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{ AttributeName: deviceId, AttributeType: S }, { AttributeName: eventId, AttributeType: S }]
+      KeySchema: [{ AttributeName: deviceId, KeyType: HASH }, { AttributeName: eventId, KeyType: RANGE }]
+      SSESpecification: { SSEEnabled: true }
+      TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }
+      Tags: [{ Key: Project, Value: RebootRoute }]
+  PartnersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{ AttributeName: partnerId, AttributeType: S }]
+      KeySchema: [{ AttributeName: partnerId, KeyType: HASH }]
+      SSESpecification: { SSEEnabled: true }
+      Tags: [{ Key: Project, Value: RebootRoute }]
+  DeviceImages:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      LifecycleConfiguration:
+        Rules: [{ Id: DeletePilotPhotosAfter90Days, Status: Enabled, ExpirationInDays: 90, AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 } }]
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: [!Ref AllowedOrigin]
+            AllowedMethods: [POST]
+            AllowedHeaders: [Content-Type]
+            MaxAge: 300
+      Tags: [{ Key: Project, Value: RebootRoute }]
+  DeviceImagesPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DeviceImages
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt DeviceImages.Arn, !Sub '${DeviceImages.Arn}/*']
+            Condition: { Bool: { 'aws:SecureTransport': 'false' } }
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      AdminCreateUserConfig: { AllowAdminCreateUserOnly: true }
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      Policies:
+        PasswordPolicy: { MinimumLength: 12, RequireLowercase: true, RequireUppercase: true, RequireNumbers: true, RequireSymbols: true }
+      UserPoolTags: { Project: RebootRoute }
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 1
+      TokenValidityUnits: { AccessToken: hours, IdToken: hours, RefreshToken: days }
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: { UserPoolId: !Ref UserPool, GroupName: ADMIN }
+  VolunteerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: { UserPoolId: !Ref UserPool, GroupName: VOLUNTEER }
+  PartnerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: { UserPoolId: !Ref UserPool, GroupName: PARTNER }
+  ApplicationBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub '${AWS::StackName}-events'
+  Notifications:
+    Type: AWS::SNS::Topic
+    Properties:
+      Tags: [{ Key: Project, Value: RebootRoute }]
+  NotificationsPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref Notifications]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref Notifications
+            Condition: { ArnEquals: { 'aws:SourceArn': !GetAtt SafetyNotificationRule.Arn } }
+          - Effect: Allow
+            Principal: { Service: cloudwatch.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref Notifications
+            Condition: { ArnEquals: { 'aws:SourceArn': !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-lambda-errors' } }
+  SafetyNotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref ApplicationBus
+      EventPattern:
+        source: [rebootroute.custody]
+        detail-type: [SafetyReviewRequested]
+      Targets:
+        - Id: SafetyNotifications
+          Arn: !Ref Notifications
+          Input: '"A RebootRoute safety review needs administrator attention. Sign in to the campus queue."'
+  FunctionErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-lambda-errors'
+      AlarmDescription: RebootRoute Lambda reported an execution error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref AssessmentFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref Notifications]
+Outputs:
+  ApiBaseUrl:
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${AppEnvironment}'
+  CognitoUserPoolId: { Value: !Ref UserPool }
+  CognitoClientId: { Value: !Ref UserPoolClient }
+  DevicesTableName: { Value: !Ref DevicesTable }
+  CustodyEventsTableName: { Value: !Ref CustodyEventsTable }
+  PartnersTableName: { Value: !Ref PartnersTable }
+  DeviceImagesBucket: { Value: !Ref DeviceImages }
+  ApplicationEventBus: { Value: !Ref ApplicationBus }
+  NotificationsTopicArn: { Value: !Ref Notifications }

@@ -1,0 +1,7 @@
+{
+  "name": "RebootRoute", "short_name": "RebootRoute",
+  "description": "Repair first. Recycle right.",
+  "start_url": "/", "display": "standalone",
+  "background_color": "#f5f8fa", "theme_color": "#153950",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
